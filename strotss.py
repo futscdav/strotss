@@ -8,7 +8,6 @@ import numpy as np
 import os
 import math
 import PIL
-from imageio import imwrite
 from time import time
 from argparse import ArgumentParser
 
@@ -221,11 +220,10 @@ def pairwise_distances_sq_l2(x, y):
     return torch.clamp(dist, 1e-5, 1e5)/x.size(1)
 
 def distmat(x, y, cos_d=True):
-    M = torch.zeros(x.shape[0], y.shape[0]).to(x.device)
     if cos_d:
-        M = M + pairwise_distances_cos(x, y)
+        M = pairwise_distances_cos(x, y)
     else:
-        M = M + torch.sqrt(pairwise_distances_sq_l2(x, y))
+        M = torch.sqrt(pairwise_distances_sq_l2(x, y))
     return M
 
 def content_loss(feat_result, feat_content):
@@ -238,15 +236,13 @@ def content_loss(feat_result, feat_content):
     Y = Y[:,:-2]
     X = X[:,:-2]
 
-    dM = 1.
-
     Mx = distmat(X, X)
     Mx = Mx/Mx.sum(0, keepdim=True)
 
     My = distmat(Y, Y)
     My = My/My.sum(0, keepdim=True)
 
-    d = torch.abs(dM*(Mx-My)).mean()*X.size(0)
+    d = torch.abs(Mx-My).mean() * X.shape[0]
     return d
 
 def rgb_to_yuv(rgb):
