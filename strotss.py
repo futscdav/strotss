@@ -1,4 +1,3 @@
-from futscml import pil_loader, tensor_resample, pil_resize_long_edge_to, pil_to_np, np_to_pil, tensor_to_np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -8,8 +7,10 @@ import torchvision.transforms as transforms
 import numpy as np
 import os
 import math
+import PIL
 from imageio import imwrite
 from time import time
+from argparse import ArgumentParser
 
 class Vgg16_Extractor(nn.Module):
     def __init__(self, requires_grad=False):
@@ -65,8 +66,44 @@ class Vgg16_Extractor(nn.Module):
         feat = torch.cat(feat_samples,1)
         return feat
     
+# Tensor and PIL utils
+
+def pil_loader(path):
+    with open(path, 'rb') as f:
+        img = PIL.Image.open(f)
+        return img.convert('RGB')
+
+def tensor_resample(tensor, dst_size, mode='bilinear'):
+    return F.interpolate(tensor, dst_size, mode=mode, align_corners=False)
+
+def pil_resize_short_edge_to(pil, trg_size):
+    short_w = pil.width < pil.height
+    ar_resized_short = (trg_size / pil.width) if short_w else (trg_size / pil.height)
+    resized = pil.resize((int(pil.width * ar_resized_short), int(pil.height * ar_resized_short)), PIL.Image.BICUBIC)
+    return resized
+
+def pil_resize_long_edge_to(pil, trg_size):
+    short_w = pil.width < pil.height
+    ar_resized_long = (trg_size / pil.height) if short_w else (trg_size / pil.width)
+    resized = pil.resize((int(pil.width * ar_resized_long), int(pil.height * ar_resized_long)), PIL.Image.BICUBIC)
+    return resized
+
+def np_to_pil(npy):
+    return PIL.Image.fromarray(npy.astype(np.uint8))
+
+def pil_to_np(pil):
+    return np.array(pil)
+
+def tensor_to_np(tensor, cut_dim_to_3=True):
+    if len(tensor.shape) == 4:
+        if cut_dim_to_3:
+            tensor = tensor[0]
+        else:
+            return tensor.data.cpu().numpy().transpose((0, 2, 3, 1))
+    return tensor.data.cpu().numpy().transpose((1,2,0))
 
 def np_to_tensor(npy):
+    # equivalent of previous broken code
     # return (torch.Tensor(npy.astype(np.float) / 255.) - 0.5).permute((2,0,1)).unsqueeze(0)
     return np_to_tensor_correct(npy)
 
@@ -76,6 +113,8 @@ def np_to_tensor_correct(npy):
         transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
     ])
     return transform(pil).unsqueeze(0)
+
+# Laplacian Pyramid
 
 def laplacian(x):
     # x - upsample(downsample(x))
@@ -389,13 +428,21 @@ def strotss(content_pil, style_pil, content_weight=1.0*16.0, device='cuda:0'):
     return np_to_pil(result_image * 255.)
 
 if __name__ == "__main__":
-    content_pil, style_pil = pil_loader('boy.jpg'), pil_loader('source_painting.png')
-    content_weight = 1.0 * 8.0
+    parser = ArgumentParser()
+    parser.add_argument("content", type=str)
+    parser.add_argument("style", type=str)
+    parser.add_argument("--weight", type=float, default=1.0)
+    parser.add_argument("--output", type=str, default="strotss.png")
+    parser.add_argument("--device", type=str, default="cuda:0")
+    args = parser.parse_args()
 
-    device = 'cuda:0'
+    content_pil, style_pil = pil_loader(args.content), pil_loader(args.style)
+    content_weight = args.weight * 16.0
+
+    device = args.device
 
     start = time()
     result = strotss(pil_resize_long_edge_to(content_pil, 512), 
                      pil_resize_long_edge_to(style_pil, 512), content_weight, device)
-    result.save('strotss.png')
+    result.save(args.output)
     print(f'Done in {time()-start:.3f}s')
