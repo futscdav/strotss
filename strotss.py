@@ -268,7 +268,7 @@ def style_loss(X, Y, cos_d=True):
     m1, m1_inds = CX_M.min(1)
     m2, m2_inds = CX_M.min(0)
 
-    remd = torch.max(m1.mean(),m2.mean())
+    remd = torch.max(m1.mean(), m2.mean())
 
     return remd
 
@@ -276,41 +276,30 @@ def moment_loss(X, Y, moments=[1,2]):
     d = X.shape[1]
     loss = 0.
 
-    Xo = X.transpose(0,1).contiguous().view(d,-1).transpose(0,1)
-    Yo = Y.transpose(0,1).contiguous().view(d,-1).transpose(0,1)
-    splits = [Xo.shape[1]]
+    X = X.transpose(0,1).contiguous().view(d,-1).transpose(0,1)
+    Y = Y.transpose(0,1).contiguous().view(d,-1).transpose(0,1)
 
-    cb = 0
-    ce = 0
-    for i in range(len(splits)):
-        ce = cb + splits[i]
-        X = Xo[:,cb:ce]
-        Y = Yo[:,cb:ce]
-        cb = ce
+    mu_x = torch.mean(X, 0, keepdim=True)
+    mu_y = torch.mean(Y, 0, keepdim=True)
+    mu_d = torch.abs(mu_x - mu_y).mean()
 
-        mu_x = torch.mean(X,0,keepdim=True)
-        mu_y = torch.mean(Y,0,keepdim=True)
-        mu_d = torch.abs(mu_x-mu_y).mean()
+    if 1 in moments:
+        loss = loss + mu_d
 
-        if 1 in moments:
-            loss = loss + mu_d
+    if 2 in moments:
+        sig_x = torch.mm((X-mu_x).transpose(0,1), (X-mu_x))/X.size(0)
+        sig_y = torch.mm((Y-mu_y).transpose(0,1), (Y-mu_y))/Y.size(0)
 
-        if 2 in moments:
-            sig_x = torch.mm((X-mu_x).transpose(0,1), (X-mu_x))/X.size(0)
-            sig_y = torch.mm((Y-mu_y).transpose(0,1), (Y-mu_y))/Y.size(0)
-
-            sig_d = torch.abs(sig_x-sig_y).mean()
-            loss = loss + sig_d
+        sig_d = torch.abs(sig_x-sig_y).mean()
+        loss = loss + sig_d
 
     return loss
 
 def calculate_loss(feat_result, feat_content, feat_style, indices, content_weight, moment_weight=1.0):
     # spatial feature extract
-    # print(feat_result[0].shape)
     num_locations = 1024
     spatial_result, spatial_content = spatial_feature_extract(feat_result, feat_content, indices[0][:num_locations], indices[1][:num_locations])
     loss_content = content_loss(spatial_result, spatial_content)
-    # the spatial features actually also contain position in image, little bit of cheating or do they have a purpose
 
     d = feat_style.shape[1]
     spatial_style = feat_style.view(1, d, -1, 1)
@@ -334,7 +323,6 @@ def optimize(result, content, style, scale, content_weight, lr, extractor):
     # torch.autograd.set_detect_anomaly(True)
     result_pyramid = make_laplace_pyramid(result, 5)
     result_pyramid = [l.data.requires_grad_() for l in result_pyramid]
-
 
     opt_iter = 200
     # if scale == 1:
@@ -374,7 +362,6 @@ def optimize(result, content, style, scale, content_weight, lr, extractor):
         loss = calculate_loss(feat_result, feat_content, feat_style, [xx, xy], content_weight)
         loss.backward()
         optimizer.step()
-        # print(it)
     return stylized
 
 
