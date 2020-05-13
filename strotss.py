@@ -12,14 +12,14 @@ from time import time
 from argparse import ArgumentParser
 
 class Vgg16_Extractor(nn.Module):
-    def __init__(self, requires_grad=False):
+    def __init__(self, space):
         super().__init__()
         self.vgg_layers = models.vgg16(pretrained=True).features
 
-        if not requires_grad:
-            for param in self.parameters():
-                param.requires_grad = False
+        for param in self.parameters():
+            param.requires_grad = False
         self.capture_layers = [1,3,6,8,11,13,15,22,29]
+        self.space = space
         
     def forward_base(self, x):
         feat = [x]
@@ -29,6 +29,10 @@ class Vgg16_Extractor(nn.Module):
         return feat
 
     def forward(self, x):
+        if self.space != 'vgg':
+            x = (x + 1.) / 2.
+            x = x - (torch.Tensor([0.485, 0.456, 0.406]).to(x.device).view(1, -1, 1, 1))
+            x = x / (torch.Tensor([0.229, 0.224, 0.225]).to(x.device).view(1, -1, 1, 1))
         feat = self.forward_base(x)
         return feat
     
@@ -101,10 +105,10 @@ def tensor_to_np(tensor, cut_dim_to_3=True):
             return tensor.data.cpu().numpy().transpose((0, 2, 3, 1))
     return tensor.data.cpu().numpy().transpose((1,2,0))
 
-def np_to_tensor(npy):
-    # equivalent of previous broken code
-    # return (torch.Tensor(npy.astype(np.float) / 255.) - 0.5).permute((2,0,1)).unsqueeze(0)
-    return np_to_tensor_correct(npy)
+def np_to_tensor(npy, space):
+    if space == 'vgg':
+        return np_to_tensor_correct(npy)
+    return (torch.Tensor(npy.astype(np.float) / 127.5) - 1.0).permute((2,0,1)).unsqueeze(0)
 
 def np_to_tensor_correct(npy):
     pil = np_to_pil(npy)
@@ -232,7 +236,6 @@ def content_loss(feat_result, feat_content):
     X = feat_result.transpose(0,1).contiguous().view(d,-1).transpose(0,1)
     Y = feat_content.transpose(0,1).contiguous().view(d,-1).transpose(0,1)
 
-    Xc = X[:,-2:]
     Y = Y[:,:-2]
     X = X[:,:-2]
 
@@ -273,11 +276,9 @@ def style_loss(X, Y, cos_d=True):
     return remd
 
 def moment_loss(X, Y, moments=[1,2]):
-    d = X.shape[1]
     loss = 0.
-
-    X = X.transpose(0,1).contiguous().view(d,-1).transpose(0,1)
-    Y = Y.transpose(0,1).contiguous().view(d,-1).transpose(0,1)
+    X = X.squeeze().t()
+    Y = Y.squeeze().t()
 
     mu_x = torch.mean(X, 0, keepdim=True)
     mu_y = torch.mean(Y, 0, keepdim=True)
@@ -287,11 +288,13 @@ def moment_loss(X, Y, moments=[1,2]):
         loss = loss + mu_d
 
     if 2 in moments:
-        sig_x = torch.mm((X-mu_x).transpose(0,1), (X-mu_x))/X.size(0)
-        sig_y = torch.mm((Y-mu_y).transpose(0,1), (Y-mu_y))/Y.size(0)
+        X_c = X - mu_x
+        Y_c = Y - mu_y
+        X_cov = torch.mm(X_c.t(), X_c) / (X.shape[0] - 1)
+        Y_cov = torch.mm(Y_c.t(), Y_c) / (Y.shape[0] - 1)
 
-        sig_d = torch.abs(sig_x-sig_y).mean()
-        loss = loss + sig_d
+        D_cov = torch.abs(X_cov - Y_cov).mean()
+        loss = loss + D_cov
 
     return loss
 
@@ -365,14 +368,14 @@ def optimize(result, content, style, scale, content_weight, lr, extractor):
     return stylized
 
 
-def strotss(content_pil, style_pil, content_weight=1.0*16.0, device='cuda:0'):
+def strotss(content_pil, style_pil, content_weight=1.0*16.0, device='cuda:0', space='uniform'):
     content_np = pil_to_np(content_pil)
     style_np = pil_to_np(style_pil)
-    content_full = np_to_tensor(content_np).to(device)
-    style_full = np_to_tensor(style_np).to(device)
+    content_full = np_to_tensor(content_np, space).to(device)
+    style_full = np_to_tensor(style_np, space).to(device)
 
     lr = 2e-3
-    extractor = Vgg16_Extractor().to(device)
+    extractor = Vgg16_Extractor(space=space).to(device)
 
     scale_last = max(content_full.shape[2], content_full.shape[3])
     scales = [8, 4, 2, 1]
@@ -404,7 +407,9 @@ def strotss(content_pil, style_pil, content_weight=1.0*16.0, device='cuda:0'):
         # next scale lower weight
         content_weight /= 2.0
 
-    result_image = tensor_to_np(tensor_resample(torch.clamp(result, -1.7, 1.7), [content_full.shape[2], content_full.shape[3]])) # 
+    clow = -1.0 if space == 'uniform' else -1.7
+    chigh = 1.0 if space == 'uniform' else 1.7
+    result_image = tensor_to_np(tensor_resample(torch.clamp(result, clow, chigh), [content_full.shape[2], content_full.shape[3]])) # 
     # renormalize image
     result_image -= result_image.min()
     result_image /= result_image.max()
@@ -417,6 +422,8 @@ if __name__ == "__main__":
     parser.add_argument("--weight", type=float, default=1.0)
     parser.add_argument("--output", type=str, default="strotss.png")
     parser.add_argument("--device", type=str, default="cuda:0")
+    # uniform ospace = optimization done in [-1, 1], else imagenet normalized space
+    parser.add_argument("--ospace", type=str, default="uniform", choices=["uniform", "vgg"])
     args = parser.parse_args()
 
     content_pil, style_pil = pil_loader(args.content), pil_loader(args.style)
@@ -426,6 +433,6 @@ if __name__ == "__main__":
 
     start = time()
     result = strotss(pil_resize_long_edge_to(content_pil, 512), 
-                     pil_resize_long_edge_to(style_pil, 512), content_weight, device)
+                     pil_resize_long_edge_to(style_pil, 512), content_weight, device, args.ospace)
     result.save(args.output)
     print(f'Done in {time()-start:.3f}s')
