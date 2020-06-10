@@ -238,14 +238,16 @@ def content_loss(feat_result, feat_content):
 
     Y = Y[:,:-2]
     X = X[:,:-2]
+    # X = X.t()
+    # Y = Y.t()
 
     Mx = distmat(X, X)
-    Mx = Mx/Mx.sum(0, keepdim=True)
+    Mx = Mx#/Mx.sum(0, keepdim=True)
 
     My = distmat(Y, Y)
-    My = My/My.sum(0, keepdim=True)
+    My = My#/My.sum(0, keepdim=True)
 
-    d = torch.abs(Mx-My).mean() * X.shape[0]
+    d = torch.abs(Mx-My).mean()# * X.shape[0]
     return d
 
 def rgb_to_yuv(rgb):
@@ -285,6 +287,7 @@ def moment_loss(X, Y, moments=[1,2]):
     mu_d = torch.abs(mu_x - mu_y).mean()
 
     if 1 in moments:
+        # print(mu_x.shape)
         loss = loss + mu_d
 
     if 2 in moments:
@@ -292,6 +295,9 @@ def moment_loss(X, Y, moments=[1,2]):
         Y_c = Y - mu_y
         X_cov = torch.mm(X_c.t(), X_c) / (X.shape[0] - 1)
         Y_cov = torch.mm(Y_c.t(), Y_c) / (Y.shape[0] - 1)
+
+        # print(X_cov.shape)
+        # exit(1)
 
         D_cov = torch.abs(X_cov - Y_cov).mean()
         loss = loss + D_cov
@@ -378,11 +384,11 @@ def strotss(content_pil, style_pil, content_weight=1.0*16.0, device='cuda:0', sp
     extractor = Vgg16_Extractor(space=space).to(device)
 
     scale_last = max(content_full.shape[2], content_full.shape[3])
-    scales = [8, 4, 2, 1]
-    # if < 32, vgg will fail
-    if content_pil.width // scales[0] < 32 or content_pil.height // scales[0] < 32 or \
-        style_pil.width // scales[0] < 32 or style_pil.height // scales[0] < 32:
-        scales = [4, 2, 1]
+    scales = []
+    for scale in range(10):
+        divisor = 2**scale
+        if min(content_pil.width, content_pil.height) // divisor >= 33:
+            scales.insert(0, divisor)
     
     for scale in scales:
         # rescale content to current scale
@@ -424,7 +430,13 @@ if __name__ == "__main__":
     parser.add_argument("--device", type=str, default="cuda:0")
     # uniform ospace = optimization done in [-1, 1], else imagenet normalized space
     parser.add_argument("--ospace", type=str, default="uniform", choices=["uniform", "vgg"])
+    parser.add_argument("--resize_to", type=int, default=512)
     args = parser.parse_args()
+
+    # make 256 the smallest possible long side, will still fail if short side is <
+    if args.resize_to < 2**8:
+        print("Resulution too low.")
+        exit(1)
 
     content_pil, style_pil = pil_loader(args.content), pil_loader(args.style)
     content_weight = args.weight * 16.0
@@ -432,7 +444,7 @@ if __name__ == "__main__":
     device = args.device
 
     start = time()
-    result = strotss(pil_resize_long_edge_to(content_pil, 512), 
-                     pil_resize_long_edge_to(style_pil, 512), content_weight, device, args.ospace)
+    result = strotss(pil_resize_long_edge_to(content_pil, args.resize_to), 
+                     pil_resize_long_edge_to(style_pil, args.resize_to), content_weight, device, args.ospace)
     result.save(args.output)
     print(f'Done in {time()-start:.3f}s')
